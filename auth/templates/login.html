@@ -1,7 +1,28 @@
 $def with (form)
 $var title = form.title
-<form name="main" method="post">
-<input type="hidden" name="csrf_token" value="$csrf_token()"/>
-$:form.render()
-<input type="submit" value="Login"/>
-</form>
+
+<div class="row">
+    <div class="col-md-offset-4 col-md-4 col-sm-offset-3 col-sm-6">
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h4 class="panel-title">Login</h4>
+            </div>
+
+            <div class="panel-body">
+                <form name="main" method="post">
+                    <input type="hidden" name="csrf_token" value="$csrf_token()"/>
+
+                    $for input in form.inputs:
+                        <div class="form-group">
+                            <label>$input.description</label>
+                            $:input.render()
+                        </div>
+
+                    <div class="form-group text-right">
+                        <input type="submit" class="btn btn-primary" value="Login"/>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

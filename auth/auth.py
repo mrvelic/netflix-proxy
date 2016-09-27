@@ -46,6 +46,17 @@ def run_ipt_cmd(ipaddr, op):
     return rc, err, output
 
 
+def run_bypass_ipt_cmd(ipaddr, op):
+    iface = get_iface()
+    web.debug('DEBUG: public iface=%s' % iface)
+    ipt_cmd = 'iptables -t nat -%s PREROUTING -s %s/32 -i %s -j DNAT -p udp --dport 53 --to-destination 8.8.8.8:53 -v && iptables-save > /etc/iptables/rules.v4 || iptables-save > /etc/iptables.rules' % (op, ipaddr, iface)
+    web.debug('DEBUG: ipaddr=%s, op=%s, ipt_cmd=%s' % (ipaddr, op, ipt_cmd))
+    p = Popen(ipt_cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True)
+    output, err = p.communicate()
+    rc = p.returncode
+    return rc, err, output
+
+
 def get_client_public_ip():
     return web.ctx.env.get('HTTP_X_FORWARDED_FOR') or web.ctx.get('ip', None)
 
@@ -202,7 +213,9 @@ def get_form(name='add'):
     if session.user['privilege'] == 1:
         if name == 'add':
             frm = web.form.Form(ipaddr_input,
-                                web.form.Button('Add', type='submit', value='submit', id='submit'))
+                                web.form.Button('Add', description="Add", type='submit', value='submit', id='submit'),
+                                web.form.Button("Enable Bypass", type='submit', value='Enable Bypass', id='enable_bypass'),
+                                web.form.Button("Disable Bypass", type='submit', value='Disable Bypass', id='disable_bypass'))
         if name == 'delete':
             frm = web.form.Form(ipaddr_input,
                                 web.form.Button('Delete', type='submit', value='submit', id='submit'))
@@ -215,7 +228,9 @@ def get_form(name='add'):
         ipaddrs = get_ipaddrs()
         if name == 'add':
             frm = web.form.Form(web.form.Dropdown('ipaddr', []),
-                                web.form.Button('Add', type='submit', value='add', id='add'))
+                                web.form.Button('Add', description="Add", type='submit', value='submit', id='submit'),
+                                web.form.Button("Enable Bypass", type='submit', value='Enable Bypass', id='enable_bypass'),
+                                web.form.Button("Disable Bypass", type='submit', value='Disable Bypass', id='disable_bypass'))
 
             frm.ipaddr.args = [get_client_public_ip()]
             frm.title = 'add'
@@ -233,8 +248,8 @@ def get_form(name='add'):
 
 def get_redirect_page():
     content = web.form.Form()
-    content.title = 'Redirect to Google'
-    content.redirect_url = 'http://google.com/'
+    content.title = 'Redirect to Form'
+    content.redirect_url = '/add'
     return content
                 
 
@@ -304,6 +319,7 @@ t_globals['render'] = lambda t, *args: render._template(t)(*args)
 t_globals['csrf_token'] = csrf_token
 t_globals['context'] = session
 
+
 class Index:
 
     def GET(self):
@@ -328,12 +344,12 @@ class Index:
 
 class Login:
 
-    loginform = web.form.Form(web.form.Textbox('username', web.form.notnull),
-                              web.form.Password('password', web.form.notnull))
+    loginform = web.form.Form(web.form.Textbox('username', web.form.notnull, description="Username", class_="form-control"),
+                              web.form.Password('password', web.form.notnull, description="Password", class_="form-control"))
 
     def get_login_form(self):
         login_form = Login.loginform()
-        login_form.title = 'login'
+        login_form.title = 'Login'
         return login_form
 
 
@@ -344,12 +360,12 @@ class Login:
             if session.user:
                 raise web.seeother('/add')
             else:
-                flash('success', 'welcome, please login to authorize %s' % ipaddr)                
+                flash('success', 'Welcome, please login to authorize %s' % ipaddr)                
                 return render.login(self.get_login_form())
             
         except Exception, e:
             web.debug(traceback.print_exc())
-            flash('success', 'welcome, please login to authorize %s' % ipaddr)                
+            flash('success', 'Welcome, please login to authorize %s' % ipaddr)                
             return render.login(self.get_login_form())
 
 
@@ -357,7 +373,7 @@ class Login:
     def POST(self):
         login_form = self.get_login_form()
         if not login_form.validates():
-            flash('error', 'form validation failed')
+            flash('error', 'Please enter a valid username or password')
             return render.login(login_form)
         username = login_form['username'].value
         password = login_form['password'].value
@@ -365,11 +381,11 @@ class Login:
         if user:
             session.user = user
             web.debug(web.config.session_parameters)
-            flash('success', """you are now logged in, "Add" to authorize %s""" % get_client_public_ip())
+            flash('success', """You are now logged in, "Add" to authorize %s""" % get_client_public_ip())
             raise web.seeother('/add')
         else:
             session.user = None
-            flash('error', 'login failed for user %s' % username)
+            flash('error', 'Login failed for user %s' % username)
             raise web.seeother('/login')
         return render.login(login_form)
 
@@ -397,17 +413,7 @@ class Add:
             web.debug(traceback.print_exc())
             raise web.seeother('/login')
 
-    @csrf_protected # Verify this is not CSRF, or fail
-    def POST(self):
-        auth_form = get_form()
-        if not auth_form.validates():
-            flash('error', 'form validation failed')
-            return render.form(get_form())
-        
-        if web.net.validipaddr(auth_form['ipaddr'].value) == False:
-            flash('error', '%s is not a valid IPv4 address' % auth_form['ipaddr'].value)
-            return render.form(get_form())
-
+    def authorize_ip(self, auth_form):
         if session.already_authorized:
             flash('error', '%s is already authorized' % auth_form['ipaddr'].value)
             return render.form(get_form())
@@ -439,6 +445,61 @@ class Add:
             flash('error', 'exceeded %s maximim authorized IPs' % MAX_AUTH_IP_COUNT)                          
             return render.form(get_form())
 
+    def enable_bypass_on_ip(self, auth_form):
+        web.debug('Enabling bypass for IP ipaddr=%s' % auth_form['ipaddr'].value)
+        web.header('Content-Type', 'text/html')
+        result = run_bypass_ipt_cmd(auth_form['ipaddr'].value, 'I')
+        web.debug('iptables_update: %s' % [result])
+
+        if result[0] == 0:
+            flash('success', 'succesfully added bypass for %s' % auth_form['ipaddr'].value)
+            if is_redirected():
+                web.debug('is_redirected()=%s' % is_redirected()) 
+                return render.redirect(get_redirect_page())
+            else:
+                return render.form(get_form())
+
+        else:
+            flash('error', 'error adding bypass for %s' % auth_form['ipaddr'].value)
+            return render.form(get_form())
+
+    def disable_bypass_on_ip(self, auth_form):
+        web.debug('Disabling bypass for IP ipaddr=%s' % auth_form['ipaddr'].value)
+        web.header('Content-Type', 'text/html')
+        result = run_bypass_ipt_cmd(auth_form['ipaddr'].value, 'D')
+        web.debug('iptables_update: %s' % [result])
+
+        if result[0] == 0:
+            flash('success', 'succesfully removed bypass for %s' % auth_form['ipaddr'].value)
+            if is_redirected():
+                web.debug('is_redirected()=%s' % is_redirected()) 
+                return render.redirect(get_redirect_page())
+            else:
+                return render.form(get_form())
+
+        else:
+            flash('error', 'error removing bypass for %s' % auth_form['ipaddr'].value)
+            return render.form(get_form())
+
+    @csrf_protected # Verify this is not CSRF, or fail
+    def POST(self):
+        auth_form = get_form()
+        if not auth_form.validates():
+            flash('error', 'form validation failed')
+            return render.form(get_form())
+        
+        if web.net.validipaddr(auth_form['ipaddr'].value) == False:
+            flash('error', '%s is not a valid IPv4 address' % auth_form['ipaddr'].value)
+            return render.form(get_form())
+
+        if auth_form['Enable Bypass'].value:
+            return self.enable_bypass_on_ip(auth_form)
+
+        if auth_form['Disable Bypass'].value:
+            return self.disable_bypass_on_ip(auth_form)
+
+        if auth_form['Add'].value:
+            return self.authorize_ip(auth_form)
 
 class Delete:
     
@@ -472,9 +533,14 @@ class Delete:
                                                                                auth_form['ipaddr'].value))
         web.debug('db.delete: %s' % db_result)
         if db_result == 0: db_result = 1
+
         for i in range(0, db_result):
             result = run_ipt_cmd(auth_form['ipaddr'].value, 'D')
             web.debug('iptables_update: %s' % [result])
+
+            result = run_bypass_ipt_cmd(auth_form['ipaddr'].value, 'D')
+            web.debug('iptables_update: %s' % [result])
+
         session.auth_ip_count -= 1
         flash('success', '%s de-authorized' % auth_form['ipaddr'].value)
         return render.form(get_form(name='delete'))
