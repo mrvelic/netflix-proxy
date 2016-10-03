@@ -6,3 +6,11 @@ auth/db/auth.db
 id_rsa.travis
 tunnelInfo.xml
 ChromeProfile/
+Caddyfile
+data/conf/db.override
+data/conf/sniproxy.conf
+data/conf/zones.override
+docker-compose/netflix-proxy.yaml
+docker-bind/named.recursion.conf
+netflix-proxy.log
+

@@ -1,50 +1,97 @@
-bind:
-  image: ab77/bind
-  container_name: bind
-  ports:
-    - "53:53/udp"
-  volumes:
-    - ${BUILD_ROOT}/data:/data
-  restart: always
+version: '2'
 
-caching-resolver:
-  image: andyshinn/dnsmasq
-  container_name: caching-resolver
-  cap_add:
-    - NET_ADMIN
-  volumes:
-    - ${BUILD_ROOT}/data:/data
-  command: --log-facility=- --bogus-priv --domain-needed --no-hosts --resolv-file=/data/conf/resolv.dnsmasq --no-poll
-  restart: always
+networks:
+  docker1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 173.18.0.0/16
+          gateway: 173.18.0.1
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
 
-dnsmasq:
-  image: andyshinn/dnsmasq
-  container_name: dnsmasq
-  cap_add:
-    - NET_ADMIN
-  ports:
-    - "5353:5353"
-    - "5353:5353/udp"
-  command: --port=5353 --log-facility=- -A /#/${EXTIP}
-  restart: always
+services:
+  vpn:
+#    image: dperson/openvpn-client
+    build: ${BUILD_ROOT}/docker-openvpn
+    container_name: vpn
+    devices:
+      - "/dev/net/tun"
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /root/docker_vpn_conf:/vpn
+    command: -r ${EXTIP}/32
+    restart: always
+    networks:
+      docker1:
+          ipv4_address: 173.18.0.3
 
-reverse-proxy:
-  image: abiosoft/caddy
-  container_name: caddy
-  net: host
-  volumes:
-    - ${BUILD_ROOT}/Caddyfile:/etc/Caddyfile
-    - ${BUILD_ROOT}/wwwroot:/srv
-    - ${HOME}/.caddy:/root/.caddy
-  restart: always
-  
-sniproxy:
-  image: ab77/sniproxy
-  container_name: sniproxy
-  privileged: true
-  ports:
-    - "80:80"
-    - "443:443"
-  volumes:
-    - ${BUILD_ROOT}/data:/data
-  restart: always
+  bind:
+#    build: ${BUILD_ROOT}/docker-bind
+    image: ab77/bind
+    container_name: bind
+    volumes:
+      - ${BUILD_ROOT}/data:/data
+    restart: always
+    networks:
+      docker1:
+        ipv4_address: 173.18.0.4
+    depends_on:
+      - vpn
+    ports:
+      - "53:53/udp"
+
+  caching-resolver:
+    image: andyshinn/dnsmasq
+    container_name: caching-resolver
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ${BUILD_ROOT}/data:/data
+    command: --log-facility=- --bogus-priv --domain-needed --no-hosts --resolv-file=/data/conf/resolv.dnsmasq --no-poll
+    restart: always
+    networks:
+      docker1:
+        ipv4_address: 173.18.0.5
+
+  dnsmasq:
+    image: andyshinn/dnsmasq
+    container_name: dnsmasq
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "5353:5353"
+      - "5353:5353/udp"
+    command: --port=5353 --log-facility=- -A /#/${EXTIP}
+    restart: always
+    networks:
+      docker1:
+        ipv4_address: 173.18.0.6
+
+  reverse-proxy:
+    image: abiosoft/caddy
+    container_name: caddy
+    network_mode: host
+    volumes:
+      - ${BUILD_ROOT}/Caddyfile:/etc/Caddyfile
+      - ${BUILD_ROOT}/wwwroot:/srv
+      - ${HOME}/.caddy:/root/.caddy
+    restart: always
+    
+  sniproxy:
+    build: ${BUILD_ROOT}/docker-sniproxy
+    container_name: sniproxy
+    privileged: true
+    volumes:
+      - ${BUILD_ROOT}/data:/data
+    restart: always
+    networks:
+      docker1:
+        ipv4_address: 173.18.0.7
+    depends_on:
+      - vpn
+    ports:
+      - "80:80"
+      - "443:443"

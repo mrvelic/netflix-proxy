@@ -23,5 +23,8 @@ if [[ $(get_ip6addr) != "" ]]; then
     add_source_ipv6_lb ${RANDOM_IPS}
 fi
 
+ip route del default
+ip route add default via 173.18.0.3
+
 # launch sniproxy
 /usr/sbin/sniproxy -c /data/conf/sniproxy.conf -f
